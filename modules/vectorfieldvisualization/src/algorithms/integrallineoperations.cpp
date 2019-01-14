@@ -66,8 +66,8 @@ void curvature(IntegralLine &line, dmat4 toWorld) {
             // first
             K.emplace_back(0);
         } else if (cur == positions.end() - 1) {
-            // last
-            K.emplace_back(0);
+            // last, copy second to last
+            K.emplace_back(K.back());
         } else {
             auto p = *cur;
             auto pm = *(cur - 1);
@@ -75,21 +75,37 @@ void curvature(IntegralLine &line, dmat4 toWorld) {
 
             auto t1 = pm - p;
             auto t2 = p - pp;
-            auto nt1 = glm::normalize(t1);
-            auto nt2 = glm::normalize(t2);
-            auto angle = std::acos(glm::dot(nt1, nt2));
 
-            double a = std::abs(0.5 * glm::length(pp - p));
-            double b = std::abs(0.5 * glm::length(p - pm));
-            double c = a + b;
+            //{
+            //    auto L1 = *vel;
+            //    auto L2p = *(vel - 1);
+            //    auto L2m = *(vel + 1);
+            //    auto L2 = (L2p - L2m) / (glm::length(t1) + glm::length(t2));
 
-            if (c == 0) {
-                K.emplace_back(0);
-            } else {
-                K.emplace_back(angle / c);
+            //    // TODO: This can't be right, if the vector field is multiplied with a scalar, the
+            //    // curvature should remain the same, but L1 would change
+            //    auto k = glm::length(glm::cross(L1, L2)) / (std::pow(glm::length2(L1), 1.5f));
+
+            //    K.push_back(k);
+            //} 
+             {
+                auto nt1 = glm::normalize(t1);
+                auto nt2 = glm::normalize(t2);
+                auto angle = std::acos(glm::dot(nt1, nt2));
+
+                double a = std::abs(0.5 * glm::length(t2));
+                double b = std::abs(0.5 * glm::length(t1));
+                double c = a + b;
+
+                if (c == 0) {
+                    K.emplace_back(0);
+                } else {
+                    K.emplace_back(angle / c);
+                }
             }
         }
     }
+    K[0] = K[1];  // Copy second to first
 }
 void curvature(IntegralLineSet &lines) {
     for (auto &line : lines) {
