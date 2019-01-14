@@ -84,6 +84,7 @@ ScatterPlotProcessor::ScatterPlotProcessor()
         onRadiusChange();
 
         if (dataFramePort_.hasData()) {
+            scatterPlot_.setDataFrame(dataFramePort_.getData());
             scatterPlot_.setIndexColumn(dataFramePort_.getData()->getIndexColumn());
         }
     });

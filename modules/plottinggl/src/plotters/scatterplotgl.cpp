@@ -33,6 +33,8 @@
 #include <modules/opengl/buffer/bufferobjectarray.h>
 #include <modules/opengl/texture/textureutils.h>
 #include <modules/opengl/openglutils.h>
+#include <modules/plotting/datastructures/dataframeutil.h>
+
 
 #include <inviwo/core/processors/processor.h>
 #include <inviwo/core/interaction/events/pickingevent.h>
@@ -431,6 +433,10 @@ void ScatterPlotGL::setIndexColumn(std::shared_ptr<const TemplateColumn<uint32_t
     }
 }
 
+void ScatterPlotGL::setDataFrame(std::shared_ptr<const plot::DataFrame> dataFrame) {
+    dataFrame_ = dataFrame_;
+}
+
 void ScatterPlotGL::renderAxis(const size2_t &dims) {
 
     const size2_t lowerLeft(properties_.margins_.getLeft(), properties_.margins_.getBottom());
@@ -463,6 +469,10 @@ void ScatterPlotGL::objectPicked(PickingEvent *p) {
 
     const uint32_t id = static_cast<uint32_t>(p->getPickedId());
     auto rowIndex = idToDataFrameIndex(id);
+
+    if (auto df = dataFrame_.lock()) {
+        p->setToolTip(dataframeutil::createToolTipForRow(*df, id));
+    }
 
     if (properties_.hovering_.get()) {
         if (p->getHoverState() == PickingHoverState::Enter) {
