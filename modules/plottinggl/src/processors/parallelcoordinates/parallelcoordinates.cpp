@@ -324,6 +324,8 @@ void ParallelCoordinates::process() {
 
 void ParallelCoordinates::createOrUpdateProperties() {
     axes_.clear();
+    util::KeepTrueWhileInScope updatingProperties(&updatingProperties_);
+
     for (auto& p : axisProperties_.getProperties()) {
         p->setVisible(false);
     }
@@ -712,6 +714,7 @@ void ParallelCoordinates::axisPicked(PickingEvent* p, size_t pickedID, PickType 
 void ParallelCoordinates::updateBrushing(PCPAxisSettings&) { updateBrushing(); }
 
 void ParallelCoordinates::updateBrushing() {
+    if(updatingProperties_) return;
     brushingDirty_ = false;
 
     auto iCol = dataFrame_.getData()->getIndexColumn();
