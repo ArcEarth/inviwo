@@ -67,7 +67,7 @@ char** dummyArgs() {
 
 }  // namespace
 
-InviwoApplicationQt::InviwoApplicationQt(int argc, char** argv, const std::string& displayName)
+InviwoApplicationQt::InviwoApplicationQt(int& argc, char** argv, const std::string& displayName)
     : QApplication(argc, argv)
     , InviwoApplication(argc, argv, displayName)
     , mainWindow_(nullptr)
