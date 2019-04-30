@@ -78,6 +78,15 @@ PythonInterpreter::PythonInterpreter(Python3Module* module) : isInit_(false) {
         throw ModuleInitException("Python is not Initialized", IvwContext);
     }
 
+
+#ifdef IVW_PY_VIRTENV_ACTIVATION_SCRIPT
+    std::ostringstream activateScript;
+    activateScript << "activate_this = '"<<IVW_PY_VIRTENV_ACTIVATION_SCRIPT<<"'" << std::endl;
+    activateScript << "exec(open(activate_this).read(), {'__file__': activate_this})" << std::endl;
+    py::exec(activateScript.str());
+#endif
+    
+    
     auto dict = py::globals();
     dict["inviwo_internal"] = py::module::import("inviwo_internal");
 
