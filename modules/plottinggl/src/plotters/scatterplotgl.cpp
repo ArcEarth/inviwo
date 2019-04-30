@@ -34,7 +34,7 @@
 #include <modules/opengl/texture/textureutils.h>
 #include <modules/opengl/openglutils.h>
 #include <modules/plotting/datastructures/dataframeutil.h>
-
+#include <modules/brushingandlinking/ports/brushingandlinkingports.h>
 
 #include <inviwo/core/processors/processor.h>
 #include <inviwo/core/interaction/events/pickingevent.h>
@@ -61,6 +61,7 @@ ScatterPlotGL::Properties::Properties(std::string identifier, std::string displa
     , minRadius_("minRadius", "Min Radius", 0.1f, 0, 10, 0.01f)
     , color_("color", "Color", vec4(1, 0, 0, 1), vec4(0), vec4(1), vec4(0.1f),
              InvalidationLevel::InvalidOutput, PropertySemantics::Color)
+    , selectionColor_("selectionColor", "Selection color", vec4(1.0f, 0.77f, 0.25f, 1))
     , hoverColor_("hoverColor", "Hover color", vec4(1.0f, 0.77f, 0.25f, 1))
     , tf_("transferFunction", "Transfer Function")
     , margins_("margins", "Margins", 5, 5, 5, 5)
@@ -77,6 +78,8 @@ ScatterPlotGL::Properties::Properties(std::string identifier, std::string displa
     addProperty(minRadius_);
     addProperty(tf_);
     addProperty(color_);
+    selectionColor_.setSemantics(PropertySemantics::Color);
+    addProperty(selectionColor_);
     hoverColor_.setSemantics(PropertySemantics::Color);
     addProperty(hoverColor_);
     addProperty(margins_);
@@ -107,6 +110,7 @@ ScatterPlotGL::Properties::Properties(const ScatterPlotGL::Properties &rhs)
     , radiusRange_(rhs.radiusRange_)
     , minRadius_(rhs.minRadius_)
     , color_(rhs.color_)
+    , selectionColor_(rhs.selectionColor_)
     , hoverColor_(rhs.hoverColor_)
     , tf_(rhs.tf_)
     , margins_(rhs.margins_)
@@ -121,6 +125,7 @@ ScatterPlotGL::Properties::Properties(const ScatterPlotGL::Properties &rhs)
     addProperty(minRadius_);
     addProperty(tf_);
     addProperty(color_);
+    addProperty(selectionColor_);
     addProperty(hoverColor_);
     addProperty(margins_);
     addProperty(axisMargin_);
@@ -143,6 +148,7 @@ ScatterPlotGL::Properties &ScatterPlotGL::Properties::operator=(
         useCircle_ = that.useCircle_;
         minRadius_ = that.minRadius_;
         color_ = that.color_;
+        selectionColor_ = that.selectionColor_;
         hoverColor_ = that.hoverColor_;
         tf_ = that.tf_;
         margins_ = that.margins_;
@@ -156,7 +162,7 @@ ScatterPlotGL::Properties &ScatterPlotGL::Properties::operator=(
     return *this;
 }
 
-ScatterPlotGL::ScatterPlotGL(Processor *processor)
+ScatterPlotGL::ScatterPlotGL(Processor *processor, BrushingAndLinkingInport *burshing)
     : properties_("scatterplot", "Scatterplot")
     , shader_("scatterplot.vert", "scatterplot.geom", "scatterplot.frag")
     , xAxis_(nullptr)
@@ -165,14 +171,16 @@ ScatterPlotGL::ScatterPlotGL(Processor *processor)
     , radius_(nullptr)
     , axisRenderers_({{properties_.xAxis_, properties_.yAxis_}})
     , picking_(processor, 1, [this](PickingEvent *p) { objectPicked(p); })
-    , processor_(processor) {
+    , processor_(processor)
+    , brushing_(burshing) {
 
     if (processor_) {
         shader_.onReload([this]() { processor_->invalidate(InvalidationLevel::InvalidOutput); });
     }
     properties_.hovering_.onChange([this]() {
-        if (!properties_.hovering_.get()) {
-            hoveredIndices_.clear();
+        if (!properties_.hovering_.get() && brushing_) {
+            brushing_->sendHoverEvent({});
+            // hoveredIndices_.clear();
         }
     });
 }
@@ -341,13 +349,25 @@ void ScatterPlotGL::plot(const size2_t &dims, IndexBuffer *indexBuffer, bool use
                    nullptr);
     indicesGL->getBufferObject()->unbind();
 
-    if (!hoveredIndices_.empty()) {
-        // draw hovered points on top
-        shader_.setUniform("has_color", 0);
-        shader_.setUniform("default_color", properties_.hoverColor_.get());
-        glDrawElements(
-            GL_POINTS, static_cast<uint32_t>(hoveredIndices_.size()), GL_UNSIGNED_INT,
-            std::vector<uint32_t>(hoveredIndices_.begin(), hoveredIndices_.end()).data());
+    if (brushing_ != nullptr) {
+        const auto &hoveredIndices = brushing_->getHoveredIndices();
+        const auto &selectedIndices = brushing_->getSelectedIndices();
+        if (!hoveredIndices.empty()) {
+            // draw hovered points on top
+            shader_.setUniform("has_color", 0);
+            shader_.setUniform("default_color", properties_.hoverColor_.get());
+            glDrawElements(
+                GL_POINTS, static_cast<uint32_t>(hoveredIndices.size()), GL_UNSIGNED_INT,
+                std::vector<uint32_t>(hoveredIndices.begin(), hoveredIndices.end()).data());
+        }
+        if (!selectedIndices.empty()) {
+            // draw hovered points on top
+            shader_.setUniform("has_color", 0);
+            shader_.setUniform("default_color", properties_.selectionColor_.get());
+            glDrawElements(
+                GL_POINTS, static_cast<uint32_t>(selectedIndices.size()), GL_UNSIGNED_INT,
+                std::vector<uint32_t>(selectedIndices.begin(), selectedIndices.end()).data());
+        }
     }
 
     shader_.deactivate();
@@ -469,22 +489,25 @@ void ScatterPlotGL::objectPicked(PickingEvent *p) {
 
     const uint32_t id = static_cast<uint32_t>(p->getPickedId());
     auto rowIndex = idToDataFrameIndex(id);
+    auto filterId = get<0>(rowIndex) ? get<1>(rowIndex) : id;
 
     if (auto df = dataFrame_.lock()) {
         p->setToolTip(dataframeutil::createToolTipForRow(*df, id));
     }
 
     if (properties_.hovering_.get()) {
-        if (p->getHoverState() == PickingHoverState::Enter) {
-            hoveredIndices_.insert(id);
+        if (brushing_ && p->getHoverState() == PickingHoverState::Enter) {
+            brushing_->sendHoverEvent({filterId});
+            /*hoveredIndices_.insert(id);
             if (processor_) {
                 processor_->invalidate(InvalidationLevel::InvalidOutput);
-            }
-        } else if (p->getHoverState() == PickingHoverState::Exit) {
-            hoveredIndices_.erase(id);
+            }*/
+        } else if (brushing_ && p->getHoverState() == PickingHoverState::Exit) {
+            brushing_->sendHoverEvent({});
+            /*hoveredIndices_.erase(id);
             if (processor_) {
                 processor_->invalidate(InvalidationLevel::InvalidOutput);
-            }
+            }*/
         }
     }
 
@@ -509,6 +532,9 @@ void ScatterPlotGL::objectPicked(PickingEvent *p) {
     if ((p->getPressState() == PickingPressState::Release) &&
         (p->getPressItem() == PickingPressItem::Primary) &&
         (p->getCurrentGlobalPickingId() == p->getPressedGlobalPickingId())) {
+        if (brushing_) {
+            brushing_->sendSelectionEvent({filterId}, true);
+        }
         logRowData();
     }
 }

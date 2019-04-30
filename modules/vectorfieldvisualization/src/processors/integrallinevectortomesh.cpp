@@ -34,6 +34,10 @@
 #include <inviwo/core/network/networklock.h>
 #include <inviwo/core/util/zip.h>
 
+#include <inviwo/core/interaction/events/pickingevent.h>
+
+//#pragma optimize("", off)
+
 namespace inviwo {
 
 namespace detail {
@@ -63,6 +67,8 @@ IntegralLineVectorToMesh::ColorByProperty::ColorByProperty(
     : CompositeProperty(identifier, displayName, invalidationLevel)
     , scaleBy_("scaleBy", "Data Range (for normalization)", 0, 1,
                std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max(), 0.01)
+    , invert_("invert", "Invert value (1/x)", false)
+    , log_("log", "Use Logarithm scale", false)
     , loopTF_("loopTF", "Loop Transfer Function", false)
     , minValue_("minValue", "Min " + displayName, 0, std::numeric_limits<double>::lowest(),
                 std::numeric_limits<double>::max(), 0.01, InvalidationLevel::InvalidOutput,
@@ -79,6 +85,8 @@ IntegralLineVectorToMesh::ColorByProperty::ColorByProperty(
 IntegralLineVectorToMesh::ColorByProperty::ColorByProperty(const ColorByProperty &rhs)
     : CompositeProperty(rhs)
     , scaleBy_(rhs.scaleBy_)
+    , invert_(rhs.invert_)
+    , log_(rhs.log_)
     , loopTF_(rhs.loopTF_)
     , minValue_(rhs.minValue_)
     , maxValue_(rhs.maxValue_)
@@ -90,6 +98,8 @@ IntegralLineVectorToMesh::ColorByProperty &IntegralLineVectorToMesh::ColorByProp
     const ColorByProperty &that) {
     if (this != &that) {
         scaleBy_ = that.scaleBy_;
+        invert_ = that.invert_;
+        log_ = that.log_;
         loopTF_ = that.loopTF_;
         minValue_ = that.minValue_;
         maxValue_ = that.maxValue_;
@@ -119,6 +129,8 @@ std::string IntegralLineVectorToMesh::ColorByProperty::getKey() const { return k
 
 void IntegralLineVectorToMesh::ColorByProperty::addProperties() {
     addProperty(scaleBy_);
+    addProperty(invert_);
+    addProperty(log_);
     addProperty(loopTF_);
     addProperty(minValue_);
     addProperty(maxValue_);
@@ -142,64 +154,19 @@ const ProcessorInfo IntegralLineVectorToMesh::processorInfo_{
     Tags::CPU,                              // Tags
 };
 
-bool IntegralLineVectorToMesh::isFiltered(const IntegralLine &line, size_t idx) const {
-    switch (brushBy_.get()) {
-        case BrushBy::LineIndex:
-            return brushingList_.isFiltered(line.getIndex());
-        case BrushBy::VectorPosition:
-            return brushingList_.isFiltered(idx);
-        case BrushBy::Nothing:
-        default:
-            return false;
-    }
-}
-
-bool IntegralLineVectorToMesh::isSelected(const IntegralLine &line, size_t idx) const {
-    switch (brushBy_.get()) {
-        case BrushBy::LineIndex:
-            return brushingList_.isSelected(line.getIndex());
-        case BrushBy::VectorPosition:
-            return brushingList_.isSelected(idx);
-        case BrushBy::Nothing:
-        default:
-            return false;
-    }
-}
-
-void IntegralLineVectorToMesh::updateOptions() {
-    auto lines = lines_.getData();
-    if (lines->size() == 0) return;
-
-    std::vector<OptionPropertyStringOption> options = {{"constant", "constant color"}};
-
-    for (const auto &key : lines->front().getMetaDataKeys()) {
-        options.emplace_back(key, key);
-
-        if (!getPropertyByIdentifier(key)) {
-            auto prop = std::make_unique<ColorByProperty>(key, "Color by " + key);
-            prop->setVisible(false);
-            prop->setSerializationMode(PropertySerializationMode::All);
-            addProperty(prop.release());
-        }
-    }
-    if (colors_.isConnected()) {
-        options.emplace_back("portIndex", "Colors in port (line index)");
-        options.emplace_back("portNumber", "Colors in port (line vector position)");
-    }
-
-    colorBy_.replaceOptions(options);
-}
-
 IntegralLineVectorToMesh::IntegralLineVectorToMesh()
     : Processor()
     , lines_("lines")
     , brushingList_("brushingList")
     , colors_("colors")
     , mesh_("mesh")
+    , colorsValues_("colorsValues")
     , brushBy_("brushBy_", "Brush Line by",
                {{"never", "Ignore brushing list", BrushBy::Nothing},
                 {"lineindex", "Use Line Index (seed point index)", BrushBy::LineIndex},
                 {"vectorposition", "Use position in input vector.", BrushBy::VectorPosition}})
+
+    , ignoreHoverEvent_("ignoreHoverEvent", "Do not send hover events", false)
 
     , colorBy_("colorBy", "Color by", {{"constant", "constant color"}})
 
@@ -213,21 +180,29 @@ IntegralLineVectorToMesh::IntegralLineVectorToMesh()
               {{"lines", "Lines", Output::Lines}, {"ribbons", "Ribbons", Output::Ribbons}})
 
     , ribbonWidth_("ribbonWidth", "Ribbon Width", 0.1f, 0.00001f)
-    , selectedColor_("selectedColor", "Selected Color", vec4{1.f, 0.f, 0.f, 1.f}, vec4{0.f},
+    , selectedColor_("selectedColor", "Selected Color", vec4{0.f, 0.f, 1.f, 1.f}, vec4{0.f},
                      vec4{1.f}, vec4{0.01f}, InvalidationLevel::InvalidOutput,
-                     PropertySemantics::Color) {
+                     PropertySemantics::Color)
+    , hoveredColor_("hoveredColor", "Hovered Color", vec4{1.f, 0.77f, 0.25f, 1.f}, vec4{0.f},
+                    vec4{1.f}, vec4{0.01f}, InvalidationLevel::InvalidOutput,
+                    PropertySemantics::Color)
+
+    , picking_(this, 1, [&](PickingEvent *event) { onPickEvent(event); }) {
     colors_.setOptional(true);
 
     addPort(lines_);
     addPort(colors_);
     addPort(brushingList_);
     addPort(mesh_);
+    addPort(colorsValues_);
 
     addProperty(brushBy_);
+    addProperty(ignoreHoverEvent_);
     addProperty(output_);
     addProperty(colorBy_);
     addProperty(ribbonWidth_);
     addProperty(selectedColor_);
+    addProperty(hoveredColor_);
     addProperty(stride_);
 
     addProperty(timeBasedFiltering_);
@@ -294,7 +269,10 @@ void IntegralLineVectorToMesh::process() {
     if (colorBy_.size() == 0) {
         updateOptions();
     }
-    auto mesh = std::make_shared<BasicMesh>();
+    using LineMesh = TypedMesh<buffertraits::PositionsBuffer, buffertraits::NormalBuffer,
+                               buffertraits::TexcoordBuffer<3>, buffertraits::ColorsBuffer,
+                               buffertraits::PickingBuffer>;
+    auto mesh = std::make_shared<LineMesh>();
     if (lines_.getData()->size() == 0) {
         mesh_.setData(mesh);
         return;
@@ -303,8 +281,9 @@ void IntegralLineVectorToMesh::process() {
     mesh->setModelMatrix(lines_.getData()->getModelMatrix());
     mesh->setWorldMatrix(lines_.getData()->getWorldMatrix());
 
-    std::vector<BasicMesh::Vertex> vertices;
+    std::vector<LineMesh::Vertex> vertices;
 
+    picking_.resize(lines_.getData()->size());
     vertices.reserve(lines_.getData()->size() * 2000);
 
     auto metaDataKey = colorBy_.get();
@@ -338,9 +317,13 @@ void IntegralLineVectorToMesh::process() {
 
     Output output = output_.get();
 
+    auto valuesForPort = std::make_shared<std::vector<float>>();
+
     size_t lineIdx = 0;
+    uint32_t pickID = 0;
     for (auto &line : (*lines_.getData())) {
         util::OnScopeExit incIdx([&lineIdx]() { lineIdx++; });
+        pickID = static_cast<uint32_t>(picking_.getPickingId(lineIdx));
         auto size = line.getPositions().size();
 
         if (size == 0 || isFiltered(line, lineIdx)) continue;
@@ -358,33 +341,50 @@ void IntegralLineVectorToMesh::process() {
             throw Exception("Unsupported output type", IvwContext);
         }();
 
-        auto coloring = [&, this](auto sample, size_t lineIndex, size_t lineNumber) -> vec4 {
+        auto coloring = [&, this](auto sample, size_t lineIndex, size_t lineNumber,
+                                  bool firstOrLast) -> vec4 {
             if (constantColor || this->isSelected(line, lineIdx)) {
                 return selectedColor_.get();
             }
+            if (this->isHovered(line, lineIdx)) {
+                return hoveredColor_.get();
+            }
 
             if (colorByPort) {
-                auto colors = colors_.getData();
-                size_t index = 0;
-                if (colorByPortNumber) {
-                    index = lineNumber;
-                } else if (colorByPortIndex) {
-                    index = lineIndex;
-                }
-
-                if (index >= colors->size()) {
-                    if (colorWarningOnce) {
-                        colorWarningOnce = false;
-                        LogWarn("Line index for color is out of range");
+                if (auto colorsVector = colors_.getData()) {
+                    size_t index = 0;
+                    if (colorByPortNumber) {
+                        index = lineNumber;
+                    } else if (colorByPortIndex) {
+                        index = lineIndex;
                     }
-                    index %= colors->size();
+
+                    if (index >= colorsVector->size()) {
+                        if (colorWarningOnce) {
+                            colorWarningOnce = false;
+                            LogWarn("Line index for color is out of range");
+                        }
+                        index %= colorsVector->size();
+                    }
+                    return colorsVector->at(index);
                 }
-                return colors->at(index);
+                return vec4();
             } else {
                 auto &mdValue = get<2>(sample);
                 double md = detail::norm(mdValue);
-                minMetaData = std::min(minMetaData, md);
-                maxMetaData = std::max(maxMetaData, md);
+
+                if (mdProp->invert_) {
+                    md = 1.0 / md;
+                }
+
+                if (mdProp->log_) {
+                    md = std::log(1 + md);
+                }
+
+                if (!firstOrLast) {
+                    minMetaData = std::min(minMetaData, md);
+                    maxMetaData = std::max(maxMetaData, md);
+                }
 
                 md -= mdProp->scaleBy_.get().x;
                 md /= mdProp->scaleBy_.get().y - mdProp->scaleBy_.get().x;
@@ -392,11 +392,13 @@ void IntegralLineVectorToMesh::process() {
                     md -= std::floor(md);
                 }
 
+                valuesForPort->push_back(static_cast<float>(md));
+
                 return mdProp->tf_.get().sample(md);
             }
         };
 
-        auto lineLoop = [&coloring, &vertices, &indexBuffer, &lineIdx, this](
+        auto lineLoop = [&coloring, &vertices, &indexBuffer, &lineIdx, pickID, this](
                             const IntegralLine &line, auto mdContainter) {
             size_t pointIdx = 0;
             for (auto &&sample : util::zip(line.getPositions(), line.getMetaData<dvec3>("velocity"),
@@ -412,22 +414,31 @@ void IntegralLineVectorToMesh::process() {
                 vec3 pos = get<0>(sample);
                 vec3 vel = get<1>(sample);
 
-                vec4 color = coloring(sample, line.getIndex(), lineIdx);
+                vec4 color = coloring(sample, line.getIndex(), lineIdx, first || last);
 
                 indexBuffer->add(static_cast<std::uint32_t>(vertices.size()));
-                vertices.push_back({pos, glm::normalize(vel), pos, color});
+                vertices.push_back({pos, glm::normalize(vel), pos, color, pickID});
             }
         };
 
-        auto ribbonLoop = [&coloring, &vertices, &indexBuffer, &lineIdx, this](
+        auto ribbonLoop = [&coloring, &vertices, &indexBuffer, &lineIdx, pickID, this](
                               const IntegralLine &line, auto mdContainter) {
+            size_t pointIdx = 0;
             for (auto &&sample : util::zip(line.getPositions(), line.getMetaData<dvec3>("velocity"),
                                            mdContainter, line.getMetaData<dvec3>("vorticity"))) {
+                util::OnScopeExit incPointIdx([&pointIdx]() { pointIdx++; });
+                bool first = pointIdx <= 1;
+                bool last = pointIdx >= line.getPositions().size() - 2;
+                // need to keep the two first and two last when using adjendency information
+                if (!first && !last && pointIdx % stride_.get() != 0) {
+                    continue;
+                }
+
                 vec3 pos = get<0>(sample);
                 vec3 vel = get<1>(sample);
                 vec3 vor = get<3>(sample);
 
-                vec4 color = coloring(sample, line.getIndex(), lineIdx);
+                vec4 color = coloring(sample, line.getIndex(), lineIdx, first || last);
 
                 auto N = glm::normalize(glm::cross(vor, vel));
 
@@ -435,9 +446,9 @@ void IntegralLineVectorToMesh::process() {
                 auto pos1 = pos - off;
                 auto pos2 = pos + off;
                 indexBuffer->add(static_cast<std::uint32_t>(vertices.size()));
-                vertices.push_back({pos1, N, pos1, color});
+                vertices.push_back({pos1, N, pos1, color, pickID});
                 indexBuffer->add(static_cast<std::uint32_t>(vertices.size()));
-                vertices.push_back({pos2, N, pos2, color});
+                vertices.push_back({pos2, N, pos2, color, pickID});
             }
         };
 
@@ -462,11 +473,106 @@ void IntegralLineVectorToMesh::process() {
 
     mesh->addVertices(vertices);
 
+    colorsValues_.setData(valuesForPort);
+
     mesh_.setData(mesh);
     if (mdProp) {
         mdProp->minValue_.set(minMetaData);
         mdProp->maxValue_.set(maxMetaData);
     }
+}
+
+void IntegralLineVectorToMesh::onPickEvent(PickingEvent *p) {
+
+    auto pickedID = p->getPickedId();
+    auto pressID = p->getPressedLocalPickingId();
+    
+    if (true) {  // convert to lineID
+        pickedID = lines_.getData()->at(pickedID).getIndex();
+        pressID.second = lines_.getData()->at(pressID.second).getIndex();
+    }
+
+    if (!ignoreHoverEvent_.get()) {
+        if (p->getHoverState() == PickingHoverState::Move ||
+            p->getHoverState() == PickingHoverState::Enter) {
+            brushingList_.sendHoverEvent({pickedID});
+            invalidate(InvalidationLevel::InvalidOutput);
+        } else {
+            brushingList_.sendHoverEvent({});
+            invalidate(InvalidationLevel::InvalidOutput);
+        }
+    }
+
+    if (p->getState() == PickingState::Updated && p->getPressState() == PickingPressState::Release &&
+        p->getPressItem() == PickingPressItem::Primary && pressID.first) {
+        if (brushingList_.isSelected(pickedID)) {
+            brushingList_.sendSelectionEvent({});
+        } else {
+            bool appendToExisting = true;
+            brushingList_.sendSelectionEvent({pickedID}, appendToExisting);
+        }
+    }
+}
+
+bool IntegralLineVectorToMesh::isFiltered(const IntegralLine &line, size_t idx) const {
+    switch (brushBy_.get()) {
+        case BrushBy::LineIndex:
+            return brushingList_.isFiltered(line.getIndex());
+        case BrushBy::VectorPosition:
+            return brushingList_.isFiltered(idx);
+        case BrushBy::Nothing:
+        default:
+            return false;
+    }
+}
+
+bool IntegralLineVectorToMesh::isSelected(const IntegralLine &line, size_t idx) const {
+    switch (brushBy_.get()) {
+        case BrushBy::LineIndex:
+            return brushingList_.isSelected(line.getIndex());
+        case BrushBy::VectorPosition:
+            return brushingList_.isSelected(idx);
+        case BrushBy::Nothing:
+        default:
+            return false;
+    }
+}
+
+bool IntegralLineVectorToMesh::isHovered(const IntegralLine &line, size_t idx) const {
+    switch (brushBy_.get()) {
+        case BrushBy::LineIndex:
+            return brushingList_.isHovered(line.getIndex());
+        case BrushBy::VectorPosition:
+            return brushingList_.isHovered(idx);
+        case BrushBy::Nothing:
+        default:
+            return false;
+    }
+}
+
+void IntegralLineVectorToMesh::updateOptions() {
+    auto lines = lines_.getData();
+    if (lines->size() == 0) return;
+
+    std::vector<OptionPropertyStringOption> options = {{"constant", "constant color"}};
+
+    for (const auto &key : lines->front().getMetaDataKeys()) {
+        options.emplace_back(key, key);
+
+        if (!getPropertyByIdentifier(key)) {
+            auto prop = std::make_unique<ColorByProperty>(key, "Color by " + key);
+            prop->setVisible(false);
+            prop->setSerializationMode(PropertySerializationMode::All);
+            addProperty(prop.release());
+        }
+    }
+    if (colors_.isConnected()) {
+
+        options.emplace_back("portIndex", "Colors in port (seed point index)");
+        options.emplace_back("portNumber", "Colors in port (position in input vector)");
+    }
+
+    colorBy_.replaceOptions(options);
 }
 
 }  // namespace inviwo

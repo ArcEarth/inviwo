@@ -276,7 +276,7 @@ void ScatterPlotMatrixProcessor::createScatterPlots() {
 
         auto buffer = [&]() -> std::shared_ptr<const BufferBase> {
             auto idx = color_.get();
-            if (idx == -1) {
+            if (idx == -1 || idx >= dataFrame.getNumberOfColumns()) {
                 return nullptr;
             } else {
                 return dataFrame.getColumn(idx)->getBuffer();

@@ -36,6 +36,7 @@
 #include <inviwo/core/processors/processor.h>
 #include <inviwo/core/properties/ordinalproperty.h>
 #include <inviwo/core/ports/imageport.h>
+#include <inviwo/core/interaction/pickingmapper.h>
 
 #include <modules/vectorfieldvisualization/datastructures/integralline.h>
 #include <inviwo/core/properties/transferfunctionproperty.h>
@@ -80,10 +81,13 @@ public:
         void addProperties();
 
         DoubleMinMaxProperty scaleBy_;
+        BoolProperty invert_;
+        BoolProperty log_;
         BoolProperty loopTF_;
         DoubleProperty minValue_;
         DoubleProperty maxValue_;
         TransferFunctionProperty tf_;
+        
 
         std::string key_;
     };
@@ -109,8 +113,12 @@ private:
     BrushingAndLinkingInport brushingList_;
     DataInport<std::vector<vec4>> colors_;
     MeshOutport mesh_;
+    DataOutport<std::vector<float>> colorsValues_;
+
+    
 
     TemplateOptionProperty<BrushBy> brushBy_;
+    BoolProperty ignoreHoverEvent_;
 
     OptionPropertyString colorBy_;
 
@@ -125,9 +133,14 @@ private:
     FloatProperty ribbonWidth_;
 
     FloatVec4Property selectedColor_;
+    FloatVec4Property hoveredColor_;
+
+    PickingMapper picking_;
+    void onPickEvent(PickingEvent* event);
 
     bool isFiltered(const IntegralLine& line, size_t idx) const;
     bool isSelected(const IntegralLine& line, size_t idx) const;
+    bool isHovered(const IntegralLine& line, size_t idx) const;
 
     void updateOptions();
 };

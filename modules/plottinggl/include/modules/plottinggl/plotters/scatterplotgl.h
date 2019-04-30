@@ -75,6 +75,7 @@ public:
         FloatProperty radiusRange_;
         FloatProperty minRadius_;
         FloatVec4Property color_;
+        FloatVec4Property selectionColor_;
         FloatVec4Property hoverColor_;
         TransferFunctionProperty tf_;
         MarginProperty margins_;
@@ -89,7 +90,7 @@ public:
         AxisProperty yAxis_;
     };
 
-    explicit ScatterPlotGL(Processor *processor = nullptr);
+    explicit ScatterPlotGL(Processor *processor = nullptr, BrushingAndLinkingInport* burshing = nullptr);
     virtual ~ScatterPlotGL() = default;
 
     void plot(Image &dest, IndexBuffer *indices = nullptr, bool useAxisRanges = false);
@@ -143,12 +144,12 @@ protected:
     std::array<AxisRenderer, 2> axisRenderers_;
 
     PickingMapper picking_;
-    std::set<uint32_t> hoveredIndices_;
 
     std::unique_ptr<IndexBuffer> indices_;
     std::unique_ptr<BufferObjectArray> boa_;
 
     Processor *processor_;
+    BrushingAndLinkingInport* brushing_;
     std::weak_ptr<const plot::DataFrame> dataFrame_;
 };
 
