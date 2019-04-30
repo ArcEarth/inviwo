@@ -79,6 +79,7 @@ private:
     DataFrameColumnProperty selectedColorAxis_;
     TransferFunctionProperty tf_;
     BoolProperty useSelectedColumnFromBrushing_;
+    BoolProperty autoSetTF_;
 };
 
 }  // namespace plot
