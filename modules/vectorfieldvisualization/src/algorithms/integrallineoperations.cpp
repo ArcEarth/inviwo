@@ -87,20 +87,35 @@ void curvature(IntegralLine &line, dmat4 toWorld) {
             //    auto k = glm::length(glm::cross(L1, L2)) / (std::pow(glm::length2(L1), 1.5f));
 
             //    K.push_back(k);
-            //} 
-             {
-                auto nt1 = glm::normalize(t1);
-                auto nt2 = glm::normalize(t2);
-                auto angle = std::acos(glm::dot(nt1, nt2));
+            //}
+            {
+                auto l1 = glm::length(t1);
+                auto l2 = glm::length(t2);
+                if (l1 == 0 || l2 == 0) {
+                    K.emplace_back(0);
+                    LogWarnCustom("", "Does this happen");
+                    continue;
+                }
+                auto nt1 = t1 / l1;  // normalize t1
+                auto nt2 = t2 / l2;  // normalize t2
+                auto dot = std::clamp(glm::dot(nt1, nt2),-1.0,1.0);
+                auto angle = std::acos(dot);
 
-                double a = std::abs(0.5 * glm::length(t2));
-                double b = std::abs(0.5 * glm::length(t1));
-                double c = a + b;
+                double meanL = 0.5 * (l1 + l2);
 
-                if (c == 0) {
+
+                if(angle!=angle){
+                    __debugbreak();
+                }
+                if(meanL != meanL){
+                    __debugbreak();
+                }
+
+                if (meanL == 0) {
+                    LogWarnCustom("", "Does this happen");
                     K.emplace_back(0);
                 } else {
-                    K.emplace_back(angle / c);
+                    K.emplace_back(angle / meanL);
                 }
             }
         }
